@@ -1,0 +1,398 @@
+---
+title: "stepwise regression process to find best var log"
+author: "Steven"
+date: "2024-02-23"
+output:
+  word_document: default
+  html_document: default
+Source: "https://www.kaggle.com/datasets/anthonypino/melbourne-housing-market"
+First tries: lasso regression strategy failed
+---
+
+# Data source and original descriptions
+<!--
+Some Key Details
+Suburb: Suburb
+
+Address: Address
+
+Rooms: Number of rooms
+
+Price: Price in Australian dollars
+
+Method:
+S - property sold;
+SP - property sold prior;
+PI - property passed in;
+PN - sold prior not disclosed;
+SN - sold not disclosed;
+NB - no bid;
+VB - vendor bid;
+W - withdrawn prior to auction;
+SA - sold after auction;
+SS - sold after auction price not disclosed.
+N/A - price or highest bid not available.
+
+Type:
+br - bedroom(s);
+h - house,cottage,villa, semi,terrace;
+u - unit, duplex;
+t - townhouse;
+dev site - development site;
+o res - other residential.
+
+SellerG: Real Estate Agent
+
+Date: Date sold
+
+Distance: Distance from CBD in Kilometres
+
+Regionname: General Region (West, North West, North, North east …etc)
+Propertycount: Number of properties that exist in the suburb.
+
+Bedroom2 : Scraped # of Bedrooms (from different source)
+
+Bathroom: Number of Bathrooms
+
+Car: Number of carspots
+
+Landsize: Land Size in Metres
+
+BuildingArea: Building Size in Metres
+
+YearBuilt: Year the house was built
+
+CouncilArea: Governing council for the area
+
+Lattitude: Self explanitory
+
+Longtitude: Self explanitory
+-->
+# Data preparation
+
+```{r Data preparation}
+# Check if the caret package is installed
+if (!requireNamespace("caret", quietly = TRUE)) {
+  # If not installed, install it
+  install.packages("caret")
+}
+
+# Load the caret package
+library(caret)
+
+
+# Load necessary libraries
+library(tidyverse)
+
+# Load the data
+data <- read_csv(file.choose())  # open file location
+
+# Correct column names
+names(data)[names(data) == "Lattitude"] <- "Latitude"
+names(data)[names(data) == "Longtitude"] <- "Longitude"
+
+# Remove unnecessary columns using dplyr's select function
+data_clean <- data %>%
+  dplyr::select(Suburb, Rooms, Type, Price, Distance, Bedroom2, Bathroom, Car, Landsize, BuildingArea, YearBuilt, CouncilArea, Latitude, Longitude, Propertycount, Date)
+
+# Convert 'Date' to date type
+data_clean$Date <- as.Date(data_clean$Date, format = "%d/%m/%Y")
+
+# Calculate 'YearsAfterBuilt'
+data_clean$YearsAfterBuilt <- as.numeric(format(data_clean$Date, "%Y")) - data_clean$YearBuilt
+
+# Calculate LogPricePerBuildingArea
+data_clean$LogPricePerBuildingArea <- log(data_clean$Price / data_clean$BuildingArea)
+
+# Drop the "Price", "Longitude", "Latitude", "YearBuilt" and columns from the dataset
+# due to persistent issue of factor mis matching between training and testing, and since the reference models do not contain Suburb variable, clean at the beginning
+# if Date is not deleted, the result would include it
+data_clean <- subset(data_clean, select = -c(Price, Longitude, Latitude, YearBuilt, Suburb, Date))
+
+# Remove rows with missing values
+data_clean <- na.omit(data_clean)
+
+# Convert categorical variables to factors
+cat_vars <- c("Type", "CouncilArea")  # Add categorical variables here
+data_clean[cat_vars] <- lapply(data_clean[cat_vars], as.factor)
+
+# Convert non-categorical variables to numeric
+non_cat_vars <- setdiff(names(data_clean), c(cat_vars, "LogPricePerBuildingArea"))
+data_clean[non_cat_vars] <- lapply(data_clean[non_cat_vars], as.numeric)
+
+
+# Standardize non-categorical variables
+data_clean[non_cat_vars] <- scale(data_clean[non_cat_vars])
+
+# Separate predictors and target variable
+predictors <- setdiff(names(data_clean), "LogPricePerBuildingArea")
+
+# Split data into training and testing sets
+set.seed(123)
+indexes <- createDataPartition(data_clean$LogPricePerBuildingArea, p = 0.8, list = FALSE)
+train_data <- data_clean[indexes, ]
+test_data <- data_clean[-indexes, ]
+
+```
+
+```{r problem check}
+problems(data_clean)
+```
+
+# Model training and AIC process
+
+```{r Model training and AIC process}
+
+# Remove rows with NA, NaN, or Inf values in the target variable
+train_data <- train_data[!is.na(train_data$LogPricePerBuildingArea) & !is.nan(train_data$LogPricePerBuildingArea) & !is.infinite(train_data$LogPricePerBuildingArea), ]
+
+# Train stepwise regression model
+model <- step(lm(LogPricePerBuildingArea ~ ., data = train_data[, c(predictors, "LogPricePerBuildingArea")]), direction = "backward")
+
+# Make predictions on test data
+predictions <- predict(model, newdata = test_data)
+
+# Evaluate the model
+rmse <- sqrt(mean((predictions - test_data$LogPricePerBuildingArea)^2))
+print(paste("RMSE: ", rmse))
+
+
+```
+
+# Displaying AIC value graph
+
+```{r Displaying AIC value graph}
+
+
+# Update AIC values from the stepwise regression process
+aic_values <- c(-15035.86, -15038, -15039.78)
+
+# Number of variables in each step (including the intercept)
+num_variables <- c(12, 11, 10)  # Adjust this based on the actual steps in model
+
+# Plotting the updated AIC values
+plot(num_variables, aic_values, type = "b", 
+     xlab = "Number of Variables", 
+     ylab = "AIC",
+     main = "Stepwise Regression: AIC vs. Number of Variables",
+     xlim = c(min(num_variables) - 1, max(num_variables) + 1),
+     ylim = c(min(aic_values) - 10, max(aic_values) + 10),
+     col = "blue",
+     pch = 19)
+
+
+
+```
+
+# final model summary
+
+```{r final model summary}
+# Train the final model based on the selected predictors from the stepwise regression
+final_model <- lm(LogPricePerBuildingArea ~ Type + Distance + Bedroom2 + Bathroom + Car + Landsize + BuildingArea + CouncilArea + YearsAfterBuilt, data = train_data)
+
+# Print the summary of the final model
+summary(final_model)
+
+
+
+```
+
+# variable correlation check
+
+```{r variable correlation check}
+if (!requireNamespace("GGally", quietly = TRUE)) {
+    install.packages("GGally")
+}
+
+# Load the GGally package
+library(GGally)
+
+#lm(formula = LogPricePerBuildingArea ~ Type + Distance + Bedroom2 + 
+#    Bathroom + Car + Landsize + BuildingArea + CouncilArea + 
+#    YearsAfterBuilt, data = train_data)
+# Select predictors for correlation analysis based on the final model (excluding non-numeric variables if they are not numerically encoded)
+cor_data <- train_data[, c("Distance", "Bedroom2", "Bathroom", "Car", "Landsize", "BuildingArea", "YearsAfterBuilt")]
+
+# Compute pairwise correlations
+correlation_matrix <- cor(cor_data)
+
+# Print pairwise correlations
+print(correlation_matrix)
+
+# Create a histogram grid for visualization
+ggpairs(cor_data)
+
+
+```
+# correlation graph display
+
+```{r correlation graph display}
+# Load necessary libraries
+library(corrplot)
+
+# Convert non-numeric columns to numeric
+cor_data_numeric <- as.data.frame(sapply(cor_data, as.numeric))
+
+# Compute pairwise correlations
+correlation_matrix <- cor(cor_data_numeric)
+
+# Print pairwise correlations
+print(correlation_matrix)
+
+# Create a correlation plot with color
+corrplot(correlation_matrix, method = "color")
+
+
+```
+
+# Actual vs predicted graph
+
+```{r Actual vs predicted graph}
+# Calculate predicted values
+predicted_values <- predict(final_model, train_data)
+
+# Extract actual values
+actual_values <- train_data$LogPricePerBuildingArea
+
+# Create a scatter plot of actual vs predicted values
+plot(actual_values, predicted_values, 
+     main = "Actual vs Predicted LogPricePerBuildingArea", 
+     xlab = "Actual LogPricePerBuildingArea", 
+     ylab = "Predicted LogPricePerBuildingArea",
+     pch = 19)  # pch = 19 makes the points solid
+
+# Add a line of perfect fit for reference
+abline(a = 0, b = 1, col = "red")
+
+
+```
+# qq and residual plots
+
+```{r qq and residual plots}
+
+
+# QQ plot for the first model
+qqnorm(residuals(final_model))
+qqline(residuals(final_model), col = "red")
+
+# Residual plot for the first model
+plot(final_model$fitted.values, residuals(final_model))
+abline(h = 0, col = "blue")
+
+```
+
+# VIF test
+
+```{r qq and residual plots}
+if (!requireNamespace("car", quietly = TRUE)) {
+    install.packages("car")
+}
+library(car)  # Load the car package for the vif function
+
+# Calculate VIF
+vif_results <- vif(final_model)
+
+# Display VIF results
+print(vif_results)
+
+print(names(vif_results))
+
+# Generate VIF interpretation based on the standard thresholds
+vif_interpretation <- ifelse(vif_results < 5, "Not concerning", 
+                             ifelse(vif_results < 10, "Moderate concern", "High concern"))
+print(vif_interpretation)
+
+
+```
+
+# Comment of results
+<!--
+Analysis of Steps and Results:
+
+Start: The initial model includes all predictors. The AIC for this model is -15035.86, which serves as a baseline for comparison.
+
+Step 1: The first step shows the removal of 'Rooms' results in a model with a slightly better (lower) AIC of -15038, indicating a slight improvement in the model's balance of fit and complexity. This suggests 'Rooms' may not be providing useful information beyond what is captured by other variables. The same goes for 'Propertycount' which, when removed, doesn't substantially worsen the model. The variables 'BuildingArea' and 'CouncilArea' appear to be the most significant contributors to the model, as their removal would significantly increase the AIC.
+
+Step 2: Here, 'Rooms' has been removed, leading to a further slight improvement in AIC to -15037.84. The analysis suggests removing 'Propertycount' could lead to an even better AIC.
+
+Step 3: After removing 'Propertycount', the AIC improves marginally to -15039.78. This final model does not suggest any more variables to remove, as doing so would increase the AIC (indicating a worse model balance).
+
+Key Observations:
+
+Variables like 'BuildingArea', 'Type', 'Distance', and 'CouncilArea' seem to be important, as removing them significantly worsens the model (based on the increase in AIC).
+
+'Propertycount', 'Rooms', and 'Landsize' seem to be less critical for the model, indicated by their removal leading to improved or nearly unchanged AIC values.
+
+AIC Improvement: The changes in AIC are relatively small, suggesting that while the model is improving, it's by incremental amounts. This is typical in stepwise regression where variables may have diminishing returns on model improvement.
+
+Final Model: The last step doesn't suggest further removals, indicating the model has reached a point where it's balanced according to the criterion used (AIC in this case).
+
+RMSE (Root Mean Square Error): The 'Inf' value suggests there might be an error or an issue with the calculation, as RMSE should be a non-negative number. Normally, RMSE helps in understanding the model's performance in terms of actual prediction errors, but here it seems there's an issue that needs addressing.
+
+In summary, this stepwise regression analysis aimed to refine the predictive model for LogPricePerBuildingArea by identifying the most meaningful variables. The final model suggests focusing on variables like 'Type', 'Distance', 'Bedroom2', 'Bathroom', 'Car', 'Landsize', 'BuildingArea', 'CouncilArea', and 'YearsAfterBuilt' for predicting log price per building area.
+
+-->
+
+
+# Comment of business implications
+
+<!--
+Implications:
+Type Impact: The negative coefficients for Typet (townhouses) and Typeu (units) compared to houses (baseline) indicate that, on average, townhouses and units have a lower logarithm of price per building area than houses, with units showing a more substantial decrease. This suggests a market preference for standalone houses over other types of dwellings, which could guide developers and investors in their project types.
+
+Location and Distance: The negative coefficient for Distance implies that properties closer to the city center (or a central point, usually CBD) are valued higher in terms of price per building area. This information is crucial for real estate developers and urban planners in deciding where to focus their development efforts or investments.
+
+Property Features: Features such as Bedroom2, Bathroom, and Car spaces have positive coefficients, indicating that these add value to a property in terms of price per building area. This is valuable information for developers and renovation companies considering the features that could enhance property value.
+
+Land and Building Area: The positive coefficient for Landsize suggests that larger land sizes are associated with higher log price per building area, while the negative coefficient for BuildingArea indicates a decrease in log price per building area with larger building sizes. This could suggest a premium on land size over the size of the actual building, a vital consideration for developers and architects.
+
+Council Area: The coefficients for different council areas highlight the significant impact of location within the city on property values. This can help real estate agents, buyers, and investors in identifying hotspots and areas with potential growth or decline.
+
+Property Age: The positive coefficient for YearsAfterBuilt suggests that newer properties tend to have higher prices per building area, which could be useful for developers and sellers in marketing newer constructions or for buyers looking for newer properties.
+
+Applications:
+Investment Decisions: Investors can use these insights to identify potential properties or areas for investment that are likely to yield higher returns, focusing on factors like location, property type, and features.
+
+Development Focus: Real estate developers can tailor their projects to meet market demands, focusing on desirable property types, locations, and features that add value according to the model's findings.
+
+Market Analysis: Real estate agents and market analysts can use this information to advise clients on buying, selling, or renting properties based on current market trends and data-driven insights.
+
+Policy Making and Urban Planning: Local governments and urban planners can use these insights for zoning decisions, infrastructure development, and housing policies to meet the demands of their constituents effectively.
+
+Marketing Strategies: Marketing professionals in the real estate sector can tailor their campaigns based on the attributes that significantly affect property values, such as highlighting the location, property features, and type in their marketing materials.
+
+In summary, this regression model provides valuable insights into the factors affecting property values and can guide various stakeholders in making informed decisions in the real estate market.
+-->
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+

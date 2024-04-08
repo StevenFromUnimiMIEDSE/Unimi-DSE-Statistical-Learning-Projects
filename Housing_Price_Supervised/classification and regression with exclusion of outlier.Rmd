@@ -1,0 +1,711 @@
+---
+title: "classification, regression with outlier exclusion"
+author: "Steven"
+date: "2024-02-16"
+output:
+  word_document: default
+  html_document: default
+Source: "https://www.kaggle.com/datasets/anthonypino/melbourne-housing-market"
+Reason for outlier elimination: problem for linear regression models, although they
+  could be valuable to analyze under other situations
+---
+
+
+## Data source and original descriptions
+<!--
+Some Key Details
+Suburb: Suburb
+
+Address: Address
+
+Rooms: Number of rooms
+
+Price: Price in Australian dollars
+
+Method:
+S - property sold;
+SP - property sold prior;
+PI - property passed in;
+PN - sold prior not disclosed;
+SN - sold not disclosed;
+NB - no bid;
+VB - vendor bid;
+W - withdrawn prior to auction;
+SA - sold after auction;
+SS - sold after auction price not disclosed.
+N/A - price or highest bid not available.
+
+Type:
+br - bedroom(s);
+h - house,cottage,villa, semi,terrace;
+u - unit, duplex;
+t - townhouse;
+dev site - development site;
+o res - other residential.
+
+SellerG: Real Estate Agent
+
+Date: Date sold
+
+Distance: Distance from CBD in Kilometres
+
+Regionname: General Region (West, North West, North, North east …etc)
+Propertycount: Number of properties that exist in the suburb.
+
+Bedroom2 : Scraped # of Bedrooms (from different source)
+
+Bathroom: Number of Bathrooms
+
+Car: Number of carspots
+
+Landsize: Land Size in Metres
+
+BuildingArea: Building Size in Metres
+
+YearBuilt: Year the house was built
+
+CouncilArea: Governing council for the area
+
+Lattitude: Self explanitory
+
+Longtitude: Self explanitory
+-->
+
+
+## Step 1: Data Cleaning and Preparation
+
+
+```{r Step 1: Data Cleaning and Preparation}
+
+# Load necessary libraries
+library(dplyr)
+library(readr)
+
+# Step 1: Load the dataset
+
+data_1 <- read_csv(file.choose())  # select the file interactively
+
+# Step 2: Correct typos in column names
+names(data_1)[names(data_1) == "Lattitude"] <- "Latitude"
+names(data_1)[names(data_1) == "Longtitude"] <- "Longitude"
+
+# Step 3: Calculate features
+# Convert 'Date' from character to Date type. 
+
+data_1$Date <- as.Date(data_1$Date, format = "%d/%m/%Y")
+
+# Extract the year from the 'Date' column
+data_1$YearOfSale <- as.numeric(format(data_1$Date, "%Y"))
+
+# Calculate 'YearsSinceBuilt' and 'Priceperbuildingarea'
+data_1$YearsSinceBuilt <- data_1$YearOfSale - data_1$YearBuilt
+data_1$Priceperbuildingarea <- with(data_1, Price / BuildingArea)
+
+# Step 4: Clean the data (Eliminate `NA` and `Inf` values)
+data_1 <- na.omit(data_1) # Remove rows with NA values
+
+#Identify numeric columns
+numeric_cols <- sapply(data_1, is.numeric)
+
+# Apply is.infinite only to numeric columns and then reduce to rows with any Inf values
+rows_with_inf <- apply(data_1[, numeric_cols], 1, function(x) any(is.infinite(x)))
+
+# Remove rows with Inf values
+data_1 <- data_1[!rows_with_inf, ]
+
+# hist 1
+hist(data_1$Priceperbuildingarea)
+
+# Step 5: Eliminate outliers in 'Priceperbuildingarea'
+Q1 <- quantile(data_1$Priceperbuildingarea, 0.25, na.rm = TRUE)
+Q3 <- quantile(data_1$Priceperbuildingarea, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1
+data_1 <- data_1 %>%
+  filter(Priceperbuildingarea >= (Q1 - 1.5 * IQR) & Priceperbuildingarea <= (Q3 + 1.5 * IQR))
+
+# hist 2
+hist(data_1$Priceperbuildingarea)
+
+
+```
+
+
+```{r}
+# Using names() function
+column_names <- names(data_1)
+print(column_names)
+
+```
+```{r}
+# Identify numeric columns
+numeric_columns <- sapply(data_1, is.numeric)
+
+# Select only numeric columns
+selected_data <- data_1[, numeric_columns]
+
+# Calculate correlation matrix
+correlation_matrix <- cor(selected_data, use = "pairwise.complete.obs")
+
+# Print correlation matrix
+print(correlation_matrix)
+```
+
+
+```{r}
+# Load the corrplot package
+library(corrplot)
+
+# Calculate the correlation matrix
+correlation_matrix <- cor(selected_data, use = "pairwise.complete.obs")
+
+# Create the colored correlation grid
+corrplot(correlation_matrix, method = "color")
+
+```
+
+
+```{r}
+
+
+```
+
+## Step 2: Classification with K-Means Clustering:
+
+```{r Step 2: Classification with K-Means Clustering}
+library(dplyr)
+library(ggplot2)
+library(cluster) # For clustering
+
+# coordinates
+coords <- data_1 %>% select(Longitude, Latitude)
+
+# Determine the optimal number of clusters (optional, for illustration)
+# This step can be computationally intensive for large datasets
+wss <- (nrow(coords)-1)*sum(apply(coords,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(coords, centers=i)$withinss)
+plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+
+# K-Means Clustering
+set.seed(123) # For reproducibility
+k <- 4 # Choose based on analysis, e.g., using the Elbow Method above
+km_res <- kmeans(coords, centers = k)
+
+# Assign class numbers to the original data and factorize
+data_1$Class <- km_res$cluster
+data_1$Class <- factor(data_1$Class)
+
+# Step 4: Visualize on a Map
+library(ggmap)
+library(ggplot2)
+
+# Basic plot with ggplot2
+ggplot(data_1, aes(x = Longitude, y = Latitude, color = factor(Class))) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Spatial Clustering of Data Points", color = "Class") +
+  theme_minimal()
+
+
+```
+
+## Step 3: visualize histograms:
+```{r Step 3: visualize histograms}
+library(ggplot2)
+library(dplyr)
+
+# 'data_1' contains 'Y_label' and 'Class' columns
+# Loop through each class and plot a histogram
+unique_classes <- unique(data_1$Class)
+
+# Create a list to store plots 
+plot_list <- list()
+
+for(class in unique_classes) {
+  plot <- data_1 %>%
+    filter(Class == class) %>%
+    ggplot(aes(x = Priceperbuildingarea)) +
+    geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+    ggtitle(paste("Histogram of Priceperbuildingarea for Class", class)) +
+    xlab("Y_label Value") +
+    ylab("Frequency")
+  
+  print(plot) # Display the plot
+  plot_list[[as.character(class)]] <- plot # Store the plot in a list 
+}
+
+
+
+```
+
+## Step 4: Box plots
+```{r Step 4: Box plots}
+library(ggplot2)
+
+# Total Box Plot for 'Priceperbuildingarea'
+ggplot(data_1, aes(y = Priceperbuildingarea)) +
+  geom_boxplot(fill = "lightblue", color = "darkblue") +
+  ggtitle("Total Box Plot of Price per Building Area") +
+  ylab("Price per Building Area") +
+  xlab("")
+
+# Box Plots for 'Priceperbuildingarea' by Class
+ggplot(data_1, aes(x = factor(Class), y = Priceperbuildingarea, fill = factor(Class))) +
+  geom_boxplot() +
+  scale_fill_brewer(palette = "Pastel1") +  # Color scheme
+  ggtitle("Box Plot of Price per Building Area by Class") +
+  xlab("Class") +
+  ylab("Price per Building Area") +
+  theme_light() +
+  theme(legend.title = element_blank()) # Remove the legend title
+
+
+```
+
+
+
+
+## Step 5: Visualization of Price distribution
+
+```{r Step 5: Visualization of Results}
+library(ggplot2)
+library(ggmap)
+
+# PricePerBuildingArea, visualize classification based on it
+ggplot(data_1, aes(x = Longitude, y = Latitude, color = Priceperbuildingarea)) + geom_point() + theme_minimal() + ggtitle("Price per Building Area Distribution")
+
+
+```
+
+## Step 6: Split Data into Training and Testing
+
+```{r}
+library(caret)
+set.seed(123) # For reproducibility
+index <- createDataPartition(data_1$Priceperbuildingarea, p = 0.8, list = FALSE)
+trainData_1 <- data_1[index, ]
+testData_1 <- data_1[-index, ]
+
+trainData_trimmed_1 <- subset(trainData_1, select = c(Class, YearsSinceBuilt, Priceperbuildingarea))
+#trainData_trimmed$Class <- factor(trainData_trimmed$Class)
+
+testData_trimmed_1 <- subset(testData_1, select = c(Class, YearsSinceBuilt, Priceperbuildingarea))
+#testData_trimmed$Class <- factor(testData_trimmed$Class)
+
+
+
+```
+
+
+```{r}
+# Convert the columns to numeric
+selected_data <- data_1[, c("Class", "YearsSinceBuilt", "Priceperbuildingarea")]
+selected_data <- sapply(selected_data, as.numeric)
+
+# Check if there are any missing values
+if (anyNA(selected_data)) {
+  # Handle missing values as needed
+  selected_data <- na.omit(selected_data)
+}
+
+# Calculate the correlation matrix
+correlation_matrix <- cor(selected_data, use = "pairwise.complete.obs")
+
+# Create the colored correlation grid
+corrplot(correlation_matrix, method = "color")
+
+
+```
+
+## Step 7: Run Regression
+```{r}
+
+model_1<- lm(Priceperbuildingarea ~ ., data = trainData_trimmed_1)
+summary(model_1)
+```
+```{r}
+
+```
+
+
+```{r QQ and residual}
+# Load necessary libraries
+library(ggplot2)
+
+# Extract residuals and fitted values
+residuals_1 <- residuals(model_1)
+fitted_values_1 <- fitted(model_1)
+
+# Create a data frame
+data_df_1 <- data.frame(residuals_1 = residuals_1, fitted_values_1 = fitted_values_1)
+
+# QQ Plot
+qqplot <- ggplot(data.frame(residuals_1 = residuals_1), aes(sample = residuals_1)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot of Residuals") +
+  theme_minimal()
+
+# Residual Plot
+residual_plot <- ggplot(data_df_1, aes(x = fitted_values_1, y = residuals_1)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Residual Plot") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Show plots
+print(qqplot)
+print(residual_plot)
+
+```
+
+## Step 8: Show Algorithm Metrics
+
+```{r}
+
+predictions_1 <- predict(model_1, testData_trimmed_1)
+actual_1 <- testData_trimmed_1$Priceperbuildingarea
+
+# Calculate RMSE and MAE
+RMSE_1 <- sqrt(mean((predictions_1 - actual_1) ^ 2))
+MAE_1 <- mean(abs(predictions_1 - actual_1))
+
+# Print metrics
+print(paste("RMSE:", RMSE_1))
+print(paste("MAE:", MAE_1))
+
+```
+## refine the model by introducing distance from center
+## Step 9: calculate geo center
+```{r}
+data_2=data_1
+
+# Calculate the center point
+center_longitude <- mean(data_2$Longitude)
+center_latitude <- mean(data_2$Latitude)
+# Print the center point
+cat("Center Longitude:", center_longitude, "\n")
+cat("Center Latitude:", center_latitude, "\n")
+```
+## Step 10: calculate distance
+```{r}
+# Function to calculate distance between two points given their longitude and latitude
+haversine_distance <- function(lon1, lat1, lon2, lat2) {
+  # Convert latitude and longitude from degrees to radians
+  lon1 <- lon1 * pi / 180
+  lat1 <- lat1 * pi / 180
+  lon2 <- lon2 * pi / 180
+  lat2 <- lat2 * pi / 180
+  
+  # Haversine formula
+  dlon <- lon2 - lon1
+  dlat <- lat2 - lat1
+  a <- sin(dlat/2)^2 + cos(lat1) * cos(lat2) * sin(dlon/2)^2
+  c <- 2 * asin(sqrt(a))
+  
+  # Radius of the Earth in kilometers
+  R <- 6371
+  
+  # Calculate the distance
+  distance <- R * c
+  return(distance)
+}
+
+# Calculate the center point
+center_longitude <- mean(data_2$Longitude)
+center_latitude <- mean(data_2$Latitude)
+# Print the center point
+cat("Center Longitude:", center_longitude, "\n")
+cat("Center Latitude:", center_latitude, "\n")
+
+# Calculate distance from center for each data point
+data_2$distance_from_center <- apply(data_2, 1, function(row) {
+  haversine_distance(as.numeric(row["Longitude"]), as.numeric(row["Latitude"]), center_longitude, center_latitude)
+})
+
+# Print the updated data frame
+print(data_2)
+```
+
+## Step 11: Split Data into Training and Testing
+
+```{r}
+library(caret)
+set.seed(123) # For reproducibility
+index <- createDataPartition(data_2$Priceperbuildingarea, p=0.8, list=FALSE)
+trainData_2 <- data_2[index, ]
+testData_2 <- data_2[-index, ]
+
+trainData_trimmed_2=subset(trainData_2, select = c(distance_from_center, YearsSinceBuilt, Priceperbuildingarea))
+#trainData_trimmed$Class <- factor(trainData_trimmed$Class)
+
+testData_trimmed_2=subset(testData_2, select = c(distance_from_center, YearsSinceBuilt, Priceperbuildingarea))
+#testData_trimmed$Class <- factor(testData_trimed$Class)
+
+
+```
+
+
+
+## Step 12: Run Regression
+```{r}
+
+model_2 <- lm(Priceperbuildingarea ~ ., data = trainData_trimmed_2)
+summary(model_2)
+```
+```{r}
+# Extract residuals and fitted values for model2
+residuals_2 <- residuals(model_2)
+fitted_values_2 <- fitted(model_2)
+
+# Create a data frame for model2
+data_df_model_2 <- data.frame(residuals_2 = residuals_2, fitted_values_2 = fitted_values_2)
+
+# QQ Plot for model2
+qqplot_model <- ggplot(data.frame(residuals_2 = residuals_2), aes(sample = residuals_2)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot of Residuals - Model 2") +
+  theme_minimal()
+
+# Residual Plot for model2
+residual_plot_model <- ggplot(data_df_model_2, aes(x = fitted_values_2, y = residuals_2)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Residual Plot - Model 2") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Show plots for model1
+print(qqplot_model)
+print(residual_plot_model)
+
+```
+
+## Step 13: visual comparison of both models
+```{r}
+# Predicted vs Actual values for model 1(distance based model)
+plot(trainData_trimmed_1$Priceperbuildingarea, predict(model_1), 
+     xlab = "Actual Priceperbuildingarea", ylab = "Predicted Priceperbuildingarea",
+     main = "Model 1: Predicted vs Actual")
+
+# Add a reference line with slope = 1
+abline(0, 1, col = "red")
+
+# Predicted vs Actual values for model 2(class based model)
+plot(trainData_trimmed_2$Priceperbuildingarea, predict(model_2), 
+     xlab = "Actual Priceperbuildingarea", ylab = "Predicted Priceperbuildingarea",
+     main = "Model 2: Predicted vs Actual")
+
+# Add a reference line with slope = 1
+abline(0, 1, col = "red")
+```
+
+```{r}
+# Set up the plotting area
+par(mfrow = c(1, 2))
+
+# Predicted vs Actual values for model 1(distance based model)
+plot(trainData_trimmed_1$Priceperbuildingarea, predict(model_1), 
+     xlab = "Actual Priceperbuildingarea", ylab = "Predicted Priceperbuildingarea",
+     main = "Model 1: Predicted vs Actual")
+abline(0, 1, col = "red")  # Add a reference line with slope = 1
+
+# Predicted vs Actual values for model 2(class based model)
+plot(trainData_trimmed_2$Priceperbuildingarea, predict(model_2), 
+     xlab = "Actual Priceperbuildingarea", ylab = "Predicted Priceperbuildingarea",
+     main = "Model 2: Predicted vs Actual")
+abline(0, 1, col = "red")  # Add a reference line with slope = 1
+```
+
+
+```{r}
+# Combine data frames for both models
+combined_data <- rbind(
+  data.frame(Model = "Model_1", residuals = residuals_1, fitted_values = fitted_values_1),
+  data.frame(Model = "Model_2", residuals = residuals_2, fitted_values = fitted_values_2)
+)
+
+# QQ Plot
+qqplot_combined <- ggplot(combined_data, aes(sample = residuals, color = Model)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("QQ Plot of Residuals") +
+  theme_minimal()
+
+# Residual Plot
+residual_plot_combined <- ggplot(combined_data, aes(x = fitted_values, y = residuals, color = Model)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  ggtitle("Residual Plot") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Show combined plots
+print(qqplot_combined)
+print(residual_plot_combined)
+
+```
+```{r}
+# Calculate lower and upper bounds for residuals (e.g., 95% confidence interval)
+lower_bound <- quantile(combined_data$residuals, 0.025)
+upper_bound <- quantile(combined_data$residuals, 0.975)
+
+# Residual Plot with bounds
+residual_plot_combined <- ggplot(combined_data, aes(x = fitted_values, y = residuals, color = Model)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = lower_bound, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = upper_bound, linetype = "dashed", color = "blue") +
+  ggtitle("Residual Plot with Bounds") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Show the residual plot with bounds
+print(residual_plot_combined)
+```
+
+```{r}
+library(gridExtra)
+
+# Calculate lower and upper bounds for residuals (e.g., 95% confidence interval)
+lower_bound <- quantile(combined_data$residuals, 0.025)
+upper_bound <- quantile(combined_data$residuals, 0.975)
+
+# QQ Plot for Model 1
+qqplot_model1 <- ggplot(combined_data[combined_data$Model == "Model_1", ], aes(sample = residuals)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("Model 1: QQ Plot of Residuals") +
+  theme_minimal()
+
+# Residual Plot for Model 1
+residual_plot_model1 <- ggplot(combined_data[combined_data$Model == "Model_1", ], aes(x = fitted_values, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = lower_bound, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = upper_bound, linetype = "dashed", color = "blue") +
+  ggtitle("Model 1: Residual Plot") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# QQ Plot for Model 2
+qqplot_model2 <- ggplot(combined_data[combined_data$Model == "Model_2", ], aes(sample = residuals)) +
+  geom_qq() +
+  geom_qq_line() +
+  ggtitle("Model 2: QQ Plot of Residuals") +
+  theme_minimal()
+
+# Residual Plot for Model 2
+residual_plot_model2 <- ggplot(combined_data[combined_data$Model == "Model_2", ], aes(x = fitted_values, y = residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = lower_bound, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = upper_bound, linetype = "dashed", color = "blue") +
+  ggtitle("Model 2: Residual Plot") +
+  xlab("Fitted Values") +
+  ylab("Residuals") +
+  theme_minimal()
+
+# Arrange plots in a 2x2 grid
+grid.arrange(qqplot_model1, residual_plot_model1, qqplot_model2, residual_plot_model2, ncol = 2, nrow = 2)
+
+```
+```{r}
+
+
+
+```
+
+## Step 14: Comparison of metrics
+
+```{r}
+summary(model_1)
+summary(model_2)
+# Metrics for model 1
+metrics_model_1 <- summary(model_1)
+r_squared_model_1 <- metrics_model_1$r.squared
+adj_r_squared_model_1 <- metrics_model_1$adj.r.squared
+residual_std_error_model_1 <- sqrt(metrics_model_1$sigma^2)
+f_statistic_model_1 <- metrics_model_1$fstatistic[1]
+
+# Metrics for model 2
+metrics_model_2 <- summary(model_2)
+r_squared_model_2 <- metrics_model_2$r.squared
+adj_r_squared_model_2 <- metrics_model_2$adj.r.squared
+residual_std_error_model_2 <- sqrt(metrics_model_2$sigma^2)
+f_statistic_model_2 <- metrics_model_2$fstatistic[1]
+
+# Print metrics for both models
+cat("Model 1 Metrics:\n")
+cat("R-squared:", r_squared_model_1, "\n")
+cat("Adjusted R-squared:", adj_r_squared_model_1, "\n")
+cat("Residual Standard Error:", residual_std_error_model_1, "\n")
+cat("F-statistic:", f_statistic_model_1, "\n\n")
+
+cat("Model 2 Metrics:\n")
+cat("R-squared:", r_squared_model_2, "\n")
+cat("Adjusted R-squared:", adj_r_squared_model_2, "\n")
+cat("Residual Standard Error:", residual_std_error_model_2, "\n")
+cat("F-statistic:", f_statistic_model_2, "\n")
+
+```
+
+## Step 15: Final comment
+
+<!--
+Certainly! Here's an explanation of the metrics for both Model 1 and Model 2:
+
+### Model 1 Metrics:
+- **R-squared (R²)**: This statistic measures the proportion of the variance in the dependent variable (Priceperbuildingarea) that is predictable from the independent variables (YearsSinceBuilt and distance_from_center). In Model 1, the R-squared value is approximately 0.441, indicating that about 44.1% of the variance in Priceperbuildingarea can be explained by the independent variables included in the model.
+
+- **Adjusted R-squared**: This is the R-squared value adjusted for the number of predictors in the model. It penalizes the addition of unnecessary predictors that do not improve the model's explanatory power. In Model 1, the adjusted R-squared is approximately 0.441, which is very close to the R-squared value, indicating that the model is not penalized much for the inclusion of predictors.
+
+- **Residual Standard Error (RSE)**: This statistic measures the average deviation of the observed values from the fitted values (predictions) in the units of the dependent variable (Priceperbuildingarea). In Model 1, the RSE is approximately 2069.569, suggesting that the typical difference between the observed and predicted values of Priceperbuildingarea is around 2069.569 units.
+
+- **F-statistic**: This statistic tests the overall significance of the regression model by comparing the explained variance (due to regression) with the unexplained variance (residuals). In Model 1, the F-statistic is approximately 2693.406, with a very small p-value, indicating that the model is statistically significant.
+
+### Model 2 Metrics:
+- **R-squared (R²)**: In Model 2, the R-squared value is approximately 0.362, indicating that about 36.2% of the variance in Priceperbuildingarea can be explained by the independent variables included in the model.
+
+- **Adjusted R-squared**: The adjusted R-squared in Model 2 is approximately 0.362, which is very close to the R-squared value.
+
+- **Residual Standard Error (RSE)**: In Model 2, the RSE is approximately 2211.019, suggesting that the typical difference between the observed and predicted values of Priceperbuildingarea is around 2211.019 units.
+
+- **F-statistic**: The F-statistic in Model 2 is approximately 968.9494, with a very small p-value, indicating that the model is statistically significant.
+
+### Interpretation:
+- Model 1 has a higher R-squared value and lower residual standard error compared to Model 2, indicating that Model 1 explains more of the variance in Priceperbuildingarea and has better predictive accuracy.
+- Both models have statistically significant F-statistics, indicating that the regression models are overall significant.
+- The inclusion of additional predictors (such as Class) in Model 2 did not lead to a substantial improvement in explanatory power, as evidenced by the slightly lower R-squared and adjusted R-squared values compared to Model 1.
+-->
+
+## Step 16: Business application
+<!--
+Based on the analysis of the regression models and their respective metrics, here are some insights and recommendations that a real estate agent could consider:
+
+1. **Variable Importance**:
+   - Both models indicate that the "YearsSinceBuilt" variable has a significant positive effect on the "Priceperbuildingarea." This suggests that newer buildings tend to have higher prices per building area.
+   - Model 1 also includes "distance_from_center" as a significant predictor, indicating that proximity to the center is associated with higher prices per building area.
+
+2. **Model Comparison**:
+   - Model 1, which includes only "YearsSinceBuilt" and "distance_from_center," performs better in terms of R-squared value and residual standard error compared to Model 2, which additionally includes the "Class" variable.
+   - The addition of the "Class" variable in Model 2 does not substantially improve the model's explanatory power, suggesting that it may not be a crucial factor in determining the price per building area.
+
+3. **Recommendations**:
+   - **Focus on Property Age and Location**: Real estate agents should emphasize the age of the property (YearsSinceBuilt) and its proximity to the city center (distance_from_center) when advising clients on pricing strategies.
+   - **Consider Additional Factors Carefully**: While the "Class" variable is included in Model 2, its impact on the price per building area is not significant. Real estate agents should carefully evaluate the relevance and significance of additional factors before incorporating them into pricing models.
+
+4. **Target Marketing Strategies**:
+   - Agents could tailor their marketing strategies based on the characteristics highlighted by the models. For instance, they could highlight the age of newer properties or emphasize the proximity of properties to the city center in marketing materials.
+   - They could also target specific demographics or segments of buyers who are likely to value these characteristics more, such as young professionals seeking modern properties or urban dwellers prioritizing convenience.
+
+5. **Continuous Evaluation and Improvement**:
+   - Real estate agents should continuously evaluate and refine their pricing models based on new data and market trends. They should monitor the performance of different variables and adjust their strategies accordingly to ensure optimal pricing accuracy and competitiveness in the market.
+
+By leveraging the insights gained from the regression analysis, real estate agents can make more informed decisions when pricing properties and advising clients, ultimately enhancing their effectiveness and success in the real estate market.
+-->
