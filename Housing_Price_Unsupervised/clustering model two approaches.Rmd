@@ -1,0 +1,426 @@
+---
+title: "SL project clusterng"
+author: "Steven"
+date: "20240216"
+output:
+  html_document: default
+  word_document: default
+Source: "https://www.kaggle.com/datasets/anthonypino/melbourne-housing-market"
+Reason for outlier non-elimination: the start point is to learn as much as possible
+  from the model, and there are no intuitive disruption to model itself like linear
+  regression models.
+---
+## Step 1: Data Cleaning and Preparation
+
+
+```{r Step 1: Data Cleaning and Preparation}
+
+library(readr)
+library(dplyr)
+
+# Load the dataset
+
+data <- read_csv(file.choose())  # select the file interactively
+
+# Correcting the typos in column names
+names(data)[names(data) == "Lattitude"] <- "Latitude"
+names(data)[names(data) == "Longtitude"] <- "Longitude"
+
+
+```
+
+## Step 2: clean data
+
+```{r Step 2: clean data}
+# Remove rows with NA values in specified columns and drop unnecessary columns
+data <- data %>%
+  filter(!is.na(Latitude), !is.na(Longitude), !is.na(YearBuilt), !is.na(Price), !is.na(BuildingArea)) %>%
+  select(Latitude, Longitude, YearBuilt, Price, BuildingArea)
+
+# Calculate the property age and price per building area
+data$PropertyAge <- as.numeric(format(Sys.Date(), "%Y")) - data$YearBuilt
+data$PricePerArea <- data$Price / data$BuildingArea
+
+# Drop rows with NA or infinite values after calculations
+data <- na.omit(data)
+data <- data[!is.infinite(data$PricePerArea),]
+
+
+```
+
+## Step 3: 3. Show Data Distributions:
+```{r Step 3: Show Data Distributions}
+library(ggplot2)
+
+# Plot distributions
+ggplot(data, aes(x=Latitude)) + geom_histogram(bins=20, fill="skyblue") + ggtitle("Latitude Distribution")
+ggplot(data, aes(x=Longitude)) + geom_histogram(bins=20, fill="lightgreen") + ggtitle("Longitude Distribution")
+ggplot(data, aes(x=PropertyAge)) + geom_histogram(bins=20, fill="salmon") + ggtitle("Property Age Distribution")
+ggplot(data, aes(x=PricePerArea)) + geom_histogram(bins=20, fill="gold") + ggtitle("Price Per Area Distribution")
+
+
+```
+
+## Step 4: Implement Outlier Elimination Strategy
+```{r Step 4: Implement Outlier Elimination Strategy}
+# Calculate IQR for each column and filter out outliers
+for (col in c("PricePerArea")) {
+  Q1 <- quantile(data[[col]], 0.25)
+  Q3 <- quantile(data[[col]], 0.75)
+  IQR <- Q3 - Q1
+  data <- data[data[[col]] >= (Q1 - 1.5 * IQR) & data[[col]] <= (Q3 + 1.5 * IQR), ]
+}
+#for (col in c("Latitude", "Longitude", "PropertyAge", "PricePerArea")) {
+
+
+```
+
+
+
+## Step 5: Further Steps (Clustering, Visualization, Comparison)
+
+```{r Step 5: Further Steps (Clustering, Visualization, Comparison)}
+#install.packages("factoextra")
+library(factoextra)
+set.seed(123) # For reproducibility
+
+# Scale the data
+data_scaled <- scale(data[, c("Latitude", "Longitude", "PropertyAge", "PricePerArea")])
+
+# Determine the optimal number of clusters
+fviz_nbclust(data_scaled, kmeans, method = "wss") +
+  geom_vline(xintercept = 4, linetype = 2) +
+  labs(subtitle = "Elbow Method")
+
+# Perform k-means clustering
+set.seed(123) # Ensure reproducibility
+k <- 4 # Assuming 4 is the chosen number of clusters
+km_result <- kmeans(data_scaled, centers = k, nstart = 25)
+
+# Add cluster assignment to the data
+data$Cluster <- as.factor(km_result$cluster)
+
+```
+
+## Step 6: show result in geo map
+
+```{r}
+
+library(ggplot2)
+
+# Assuming 'data' is dataframe and it contains 'Latitude', 'Longitude', and 'Cluster' columns
+
+ggplot(data, aes(x = Longitude, y = Latitude, color = Cluster)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = rainbow(length(unique(data$Cluster)))) +
+  theme_minimal() +
+  labs(title = "Cluster Distribution", x = "Longitude", y = "Latitude", color = "Cluster") +
+  coord_fixed(ratio = 1) # This helps in keeping the aspect ratio consistent for geographical data
+
+
+```
+
+
+## distance from center strategy
+
+## Step 7: Calculate the Central Point
+```{r}
+central_latitude <- mean(data$Latitude, na.rm = TRUE)
+central_longitude <- mean(data$Longitude, na.rm = TRUE)
+
+
+```
+
+## Step 8: Calculate the Distance from the Center for Each Point
+
+```{r}
+
+# Define the deg2rad function
+deg2rad <- function(deg) {
+  return(deg * (pi / 180))
+}
+
+# Haversine formula to calculate distances
+haversine_distance <- function(lat1, long1, lat2, long2) {
+  R <- 6371 # Earth radius in kilometers
+  delta_lat <- deg2rad(lat2 - lat1)
+  delta_long <- deg2rad(long2 - long1)
+  a <- sin(delta_lat / 2)^2 + cos(deg2rad(lat1)) * cos(deg2rad(lat2)) * sin(delta_long / 2)^2
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  d <- R * c
+  return(d) # Distance in kilometers
+}
+
+# Apply the distance calculation for each row in the dataframe
+data$DistanceFromCenter <- mapply(haversine_distance,
+                                  lat1 = data$Latitude, 
+                                  long1 = data$Longitude,
+                                  lat2 = central_latitude, 
+                                  long2 = central_longitude)
+
+
+
+```
+
+
+## Step 9: Cluster Using the New Feature
+```{r}
+
+#install.packages("factoextra")
+library(factoextra)
+
+# Normalize the data before clustering
+data_normalized <- scale(data[, c("DistanceFromCenter", "PropertyAge", "PricePerArea")])
+
+# Determine the optimal number of clusters using the elbow method
+set.seed(123) # Ensure reproducibility
+fviz_nbclust(data_normalized, kmeans, method = "wss") +
+  geom_vline(xintercept = 4, linetype = 2) +
+  labs(subtitle = "Elbow Method")
+
+# After visual inspection of the elbow plot, choose the optimal number of clusters
+# For example, if the elbow plot suggests that 4 is a good choice:
+num_clusters_optimal <- 4 # Adjust this based on the elbow method's outcome
+
+# Perform k-means clustering with the optimal number of clusters
+set.seed(123) # Ensure reproducibility again for the actual clustering
+km_result <- kmeans(data_normalized, centers = num_clusters_optimal, nstart = 25)
+
+# Add cluster assignment to the data
+data$Cluster_km <- as.factor(km_result$cluster)
+
+
+```
+
+
+## Step 10: Visualization and Analysis
+```{r}
+ggplot(data, aes(x = DistanceFromCenter, y = PricePerArea, color = Cluster)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = rainbow(num_clusters_optimal)) +
+  labs(title = "Clustering based on Distance from Center, Property Age, and Price Per Area",
+       x = "Distance from Center (km)", y = "Price Per Area") +
+  theme_minimal()
+
+
+```
+
+
+
+## Step 12: Visualizing Both Clustering Results
+
+```{r}
+library(ggplot2)
+
+# Visualization for original clustering based on latitude and longitude
+ggplot(data, aes(x = Longitude, y = Latitude, color = as.factor(Cluster))) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = rainbow(length(unique(data$Cluster)))) +
+  labs(title = "Original Clustering Based on Latitude and Longitude",
+       x = "Longitude", y = "Latitude", color = "Cluster") +
+  theme_minimal() +
+  ggtitle("Original Clustering Results")
+
+
+# Visualization for clustering based on distance from the center
+ggplot(data, aes(x = Longitude, y = Latitude, color = as.factor(Cluster_km))) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = rainbow(length(unique(data$Cluster_km)))) +
+  labs(title = "Clustering Based on Distance from Center",
+       x = "Longitude", y = "Latitude", color = "Cluster_km") +
+  theme_minimal() +
+  ggtitle("Distance from Center Clustering Results")
+
+
+
+```
+
+## Step 13: Calculate Metrics for Both Clustering Approaches
+
+```{r}
+
+# Assuming data is already prepared and normalized as needed
+
+# Original spatial feature clustering
+set.seed(123) # for reproducibility
+kmeans_result_orig <- kmeans(data[, c("Longitude", "Latitude")], centers = 4, nstart = 25)
+
+# Assuming you've decided on an appropriate number of centers (e.g., 4) after analysis such as the elbow method
+
+# Clustering based on distance from the center
+set.seed(123)
+kmeans_result_km <- kmeans(data[, "DistanceFromCenter", drop = FALSE], centers = 4, nstart = 25)
+
+# Update the data frame with cluster labels
+data$Cluster <- kmeans_result_orig$cluster
+data$Cluster_km <- kmeans_result_km$cluster
+
+# Convert cluster labels to numeric if they're not already
+data$Cluster_numeric <- as.numeric(data$Cluster)
+data$Cluster_km_numeric <- as.numeric(data$Cluster_km)
+```
+
+
+```{r}
+
+library(cluster) # for silhouette calculations
+
+# Calculate silhouette scores
+silhouette_orig <- silhouette(data$Cluster_numeric, dist(data[, c("Longitude", "Latitude")]))
+avg_silhouette_orig <- mean(silhouette_orig[, "sil_width"])
+
+# For the distance-based clustering, assuming appropriate preparation
+silhouette_km <- silhouette(data$Cluster_km_numeric, dist(data[, "DistanceFromCenter", drop = FALSE]))
+avg_silhouette_km <- mean(silhouette_km[, "sil_width"])
+
+# Print the metrics for comparison
+cat("Average Silhouette Score (Original):", avg_silhouette_orig, "\n")
+cat("Average Silhouette Score (Distance-based):", avg_silhouette_km, "\n")
+
+# WSS values are already part of the kmeans result object
+cat("WSS (Original):", kmeans_result_orig$tot.withinss, "\n")
+cat("WSS (Distance-based):", kmeans_result_km$tot.withinss, "\n")
+
+
+
+```
+
+## Step 14: additional visuals
+
+```{r}
+
+# Check if 'plotly' package is installed; install it if not
+if (!require(plotly)) {
+  install.packages("plotly")
+  library(plotly)
+}
+
+fig <- plot_ly(data, x = ~Longitude, y = ~Latitude, z = ~PricePerArea, color = ~Cluster, type = 'scatter3d', mode = 'markers')
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Longitude'),
+                                   yaxis = list(title = 'Latitude'),
+                                   zaxis = list(title = 'Price Per Area')))
+fig
+
+
+```
+
+```{r}
+
+# Check if 'plotly' package is installed; install it if not
+if (!require(plotly)) {
+  install.packages("plotly")
+  library(plotly)
+}
+
+fig <- plot_ly(data, x = ~Longitude, y = ~Latitude, z = ~PricePerArea, color = ~Cluster_km, type = 'scatter3d', mode = 'markers')
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Longitude'),
+                                   yaxis = list(title = 'Latitude'),
+                                   zaxis = list(title = 'Price Per Area')))
+fig
+
+
+```
+```{r}
+# Remove the row with the largest Property Age
+data <- data[data$PropertyAge < max(data$PropertyAge), ]
+```
+
+```{r}
+
+# Check if 'plotly' package is installed; install it if not
+if (!require(plotly)) {
+  install.packages("plotly")
+  library(plotly)
+}
+
+fig <- plot_ly(data, x = ~PropertyAge, y = ~PricePerArea, z = ~DistanceFromCenter, color = ~Cluster, type = 'scatter3d', mode = 'markers',
+               marker = list(size = 5)) # Adjust marker size as needed
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Property Age'),
+                                   yaxis = list(title = 'Price Per Area'),
+                                   zaxis = list(title = 'Distance From Center')))
+fig
+
+
+
+```
+
+```{r}
+
+# Check if 'plotly' package is installed; install it if not
+if (!require(plotly)) {
+  install.packages("plotly")
+  library(plotly)
+}
+
+
+fig <- plot_ly(data, x = ~PropertyAge, y = ~PricePerArea, z = ~DistanceFromCenter, color = ~Cluster_km, type = 'scatter3d', mode = 'markers',
+               marker = list(size = 5)) # Adjust marker size as needed
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Property Age'),
+                                   yaxis = list(title = 'Price Per Area'),
+                                   zaxis = list(title = 'Distance From Center')))
+fig
+
+
+
+```
+
+## Step 15: Final comment
+
+<!--
+
+Based on the results you've provided, we can make several observations and comparisons between the original clustering method (using latitude and longitude) and the distance-based clustering method.
+
+### Average Silhouette Score
+- **Original Clustering:** The average silhouette score is 0.3427781. This score indicates that, on average, objects are closer to the objects in their own cluster than to objects in other clusters, but the score also suggests that the separation is not very strong.
+- **Distance-based Clustering:** The average silhouette score is 0.5552604, which is significantly higher than that of the original clustering. This higher score suggests that the distance-based clustering method results in better-defined clusters where objects are closer to their own cluster's objects compared to those in other clusters.
+
+### Within-cluster Sum of Squares (WSS)
+- **Original Clustering:** The WSS value is 83.12818. This relatively low WSS indicates that objects within each cluster are relatively close to their respective cluster centroids, suggesting a good compactness within clusters.
+- **Distance-based Clustering:** The WSS value is 67887.45, which is substantially higher than that of the original clustering. A higher WSS suggests that objects within clusters are spread out more from their cluster centroids, indicating less compactness.
+
+### Interpretation and Insights
+- The **higher silhouette score** for the distance-based clustering suggests that it does a better job at creating distinct clusters where members are more similar to each other than to members of other clusters. This could indicate that the concept of "distance from a center" is a strong organizing principle for this particular dataset, perhaps signifying that central location plays a significant role in grouping the data points.
+- The **higher WSS** in the distance-based clustering, however, points to less compactness within clusters. This might mean that while the clusters are well-separated (as indicated by the silhouette score), the members of each cluster are not as tightly grouped around the centroid. This could be due to the nature of using a single-dimensional measure (distance from center) for clustering, which might spread out the data points more within each cluster.
+- **Comparing Metrics:** When comparing clustering models, it's important to consider both the separation of clusters (silhouette score) and the compactness (WSS). A balance between well-separated and compact clusters often indicates a good clustering result. In this case, the distance-based method provides better separation at the cost of compactness.
+
+### Conclusion
+The choice between these clustering methods should be guided by the specific context and objectives of this analysis. If the goal is to identify well-separated clusters regardless of their compactness, the distance-based method seems superior. However, if compactness within clusters is also a priority, the original method might be preferable despite its lower silhouette score.
+
+Additionally, these metrics provide a quantitative basis for comparison but don't capture the entire picture. It's also useful to visually examine the clusters, consider domain-specific knowledge, and evaluate how well each clustering meets analysis or business objectives.
+-->
+
+## Step 16: Business implication
+
+<!--
+Original Clustering (Based on Latitude and Longitude)
+This model segments properties based on their geographical location. The Silhouette Score suggested that the separation between clusters is modest, indicating that while properties are grouped by location, the differentiation between some of the clusters may not be very strong.
+
+Applications for Real Estate Agents:
+
+Geographical Market Segmentation: Use the clusters to identify distinct geographical markets within a larger area. This can help in targeting marketing efforts or tailoring property searches to specific neighborhoods that align with client preferences.
+
+Localized Strategy Development: Develop localized strategies for buying or selling properties based on the characteristics of each geographical cluster. For example, certain areas might command higher prices due to their proximity to amenities, while others offer more value due to larger property sizes.
+
+Client Matching: Match clients to properties in clusters that align with their lifestyle preferences, such as proximity to schools, work, parks, or entertainment options.
+
+Distance-Based Clustering
+This model groups properties based on their distance from a central point, possibly a downtown area, major employer, or other points of interest. The higher Silhouette Score indicates a clearer delineation between clusters, suggesting this model effectively identifies properties based on their centrality or remoteness.
+
+Applications for Real Estate Agents:
+
+Centrality Analysis: Identify properties that offer a balance between proximity to central amenities and affordability. This can be particularly appealing to clients who desire the convenience of city living but are constrained by budget.
+
+Investment Opportunities: Highlight potential investment opportunities in clusters that are centrally located but may have been overlooked or undervalued. This can attract investors looking for properties with growth potential.
+
+Buyer and Seller Advising: Advise buyers on the long-term value of investing in properties within certain clusters, especially those that are centrally located or in up-and-coming areas. For sellers in these clusters, provide insights on how to price their properties competitively.
+
+Utilizing Silhouette Score and WSS in Decision Making
+The Silhouette Score and WSS from both models provide quantitative measures to evaluate the effectiveness of each clustering approach. The higher Silhouette Score for the distance-based clustering suggests it might be more meaningful for certain applications, such as identifying investment opportunities or advising clients on the strategic value of centrality.
+
+However, the original clustering's geographical segmentation is invaluable for localized marketing strategies and understanding neighborhood-level market dynamics. The modest Silhouette Score indicates room for refinement, possibly by incorporating additional variables like property type or price range to create more distinct geographical segments.
+
+Conclusion
+By utilizing the insights from both clustering models, a real estate agent can offer nuanced advice, tailor their services to meet diverse client needs more effectively, and identify strategic opportunities in the real estate market. The choice between models or the combination thereof should be guided by specific business objectives, the nature of the local real estate market, and the preferences of the clientele.
+
+-->
+
